@@ -6,14 +6,41 @@
 # imports
 import numpy as np
 from tqdm import trange
+from tqdm import trange  # displays nice progress bar
 
 # constants
 n_neurons = 100  # network size
-n_memories = 10  # number of memories to encode
 n_epochs = 5000  # epochs to stabilize
 
 seed = 0
 rng = np.random.default_rng()
+
+
+def generate_memories(n_neurons, n_memories):
+    """
+    randomly generate n_memories memories for the net to remember
+
+    we make sure that there are no duplicates
+
+    params:
+        n_neurons: length of memory vector
+        n_memories: number of memories to generate
+    return:
+        memories: list of memories, each of which is a length n_neurons
+        vector of activations
+    """
+    # we use set to test for efficient membership testing
+    memories = []
+    for _ in range(n_memories):
+        while True:
+            mem = rng.integers(low=0, high=2, size=n_neurons)
+            mem = list(mem)
+            if mem not in memories:
+                break
+        memories.append(mem)
+
+    # convert set to list for ease of indexing later
+    return memories
 
 
 # could make this more efficient by looping over i and j > i,
@@ -30,8 +57,13 @@ def compute_synapses(memories):
         the strength of their connection
         else, decrement
 
-    return table of connection weights
+    params:
+        memories: list[list[int]], contains vectors of memories to encode
+
+    return:
+        synapses: np array of connection weights
     """
+    n_neurons = len(memories[0])
     synapses = np.zeros((n_neurons, n_neurons))
     for i, row in enumerate(synapses):
         for j, col in enumerate(row):
@@ -46,33 +78,9 @@ def compute_synapses(memories):
     return synapses
 
 
-def generate_memories():
-    """
-    randomly generate n_memories memories for the net to remember
-
-    we make sure that there are no duplicates
-
-    return list of memories, each of which is a length n_neurons vector of
-    activations
-    """
-    # we use set to test for efficient membership testing
-    memories = []
-    for _ in range(n_memories):
-        while True:
-            mem = rng.integers(low=0, high=2, size=n_neurons)
-            mem = list(mem)
-            if mem not in memories:
-                break
-        memories.append(mem)
-
-    # convert set to list for ease of indexing later
-    return memories
-
-
 def update_neuron(i, synapses, activations):
     """
     Set the value of neuron i as a function of the activations of
-    other neurons and connection weights.
 
     Sum weighted activation values of neurons in network.
     If sum is >= 0, set the activation of neuron i to 1.
