@@ -1,189 +1,176 @@
-# TODO: visualize (small) networks?
-# TODO: visualize performance across range of parameters
-# TODO: stability as fixed point
+import random
 
-
-# imports
 import numpy as np
 from tqdm import trange
-from tqdm import trange  # displays nice progress bar
-
-# constants
-n_neurons = 100  # network size
-n_epochs = 5000  # epochs to stabilize
 
 seed = 0
-rng = np.random.default_rng()
 
 
-def generate_memories(n_neurons, n_memories):
-    """
-    randomly generate n_memories memories for the net to remember
+class HopfieldNet:
+    def __init__(self, size: int, state: list[int] = []) -> None:
+        self.size = size
+        self.state = state
+        self.weights = np.zeros((size, size))
+        self.rng = np.random.default_rng(seed)  # change to random seed for experiments
 
-    we make sure that there are no duplicates
+    def train(self, memories: list[list[int]]) -> None:
+        """
+        Compute connection weights according to Hopfield's equation [2].
 
-    params:
-        n_neurons: length of memory vector
-        n_memories: number of memories to generate
-    return:
-        memories: list of memories, each of which is a length n_neurons
-        vector of activations
-    """
-    # we use set to test for efficient membership testing
-    memories = []
-    for _ in range(n_memories):
-        while True:
-            mem = rng.integers(low=0, high=2, size=n_neurons)
-            mem = list(mem)
-            if mem not in memories:
+        params:
+            memories: list of vectors representing memories to encode
+        """
+        for i, row in enumerate(self.weights):
+            for j, col in enumerate(row):
+                if j > i:  # weights are symmetric so we only compute upper triangle
+                    sum = 0
+                    for m in memories:
+                        sum += (2 * m[i] - 1) * (2 * m[j] - 1)
+                    self.weights[i, j] = self.weights[j, i] = sum
+
+    def clear_weights(self):
+        self.weights = np.zeros((self.size, self.size))
+
+    def _update_neuron(self, i: int) -> None:
+        """
+        Update the value of neuron i as a function of the activations of other
+        neurons and connection weights.
+
+        Note that self.weights[i][i] = 0, so that the activation of i is
+        automatically discounted.
+
+        params:
+            i: neuron to update
+        """
+        x_i = 0
+        for j, v_j in enumerate(self.state):
+            x_i += self.weights[i][j] * v_j
+        if x_i >= 0:
+            self.state[i] = 1
+        else:
+            self.state[i] = 0
+
+    def process_input(self, input: list[int]) -> int:
+        """
+        Compute resting state of network given input vector of activations.
+
+        Compare state of network before and after stochastically updating each
+        neuron.
+        If no change is observed, we have reached equilibrium.
+
+        params:
+            input: vector of neuron activation
+
+        return:
+            steps: complete update cycles taken to reach equilibrium
+        """
+        self.state = input.copy()
+        previous_state = None
+
+        steps = 0
+        while self.state != previous_state:
+            if steps > 999:
                 break
-        memories.append(mem)
+            previous_state = self.state.copy()
+            update_order = random.sample(
+                range(self.size), self.size
+            )  # returns shuffled indices
+            for i in update_order:
+                self._update_neuron(i)
+            steps += 1
 
-    # convert set to list for ease of indexing later
-    return memories
+        return steps
+
+    def generate_memories(self, n_memories: int) -> list[list[int]]:
+        """
+        Randomly generate n_memories distinct memories for the net to remember.
+
+        params:
+            n_memories: number of memories to generate.
+
+        return:
+            memories: list of memory vectors to remember.
+        """
+        memories = []
+        for _ in range(n_memories):
+            while True:
+                mem = self.rng.integers(low=0, high=2, size=self.size)
+                mem = list(mem)
+                if mem not in memories:
+                    break
+
+            memories.append(mem)
+
+        return memories
+
+    def corrupt_input(self, input: list[int], n: int = 1) -> list[int]:
+        bit_choices = random.sample(range(self.size), n)
+        for b in bit_choices:
+            input[b] = 1 - input[b]
+
+        return input
 
 
-# could make this more efficient by looping over i and j > i,
-# since the matrix is symmetric
-# but over smallish matrices this won't matter
-def compute_synapses(memories):
+def gen_num_memories(net_size: int = 100) -> list[int]:
     """
-    Given a list of memories to encode, computes the weight
-    matrix (synapses) of the network according to Hopfield's
-    eq. [2].
+    Generate a list of numbers of memories to encode in the network as a
+    function of network size.
+    """
+    base = int(net_size * 0.08)
+    step = int(net_size * 0.02)
+    return [base + n * step for n in range(5)]
 
-    loop over each connection T_ij and each memory
-        if i and j have the same value in that memory, increment
-        the strength of their connection
-        else, decrement
+
+def test_recall(net_size: int = 100, n_tests: int = 100, corrupt_bits: int = 1) -> None:
+    """
+    Compute network performance at recall over different number of memories.
+
+    Generate between 0.08 * net_size and 0.18 * net_size memories for the net
+    to remember.
+    Do n_tests times:
+        choose memory at random
+        corrupt corrupt_bits bits of chosen memory
+        run network on corrupt memory
+        compare output to uncorrupted memory
+        update running average of successful recalls
 
     params:
-        memories: list[list[int]], contains vectors of memories to encode
-
-    return:
-        synapses: np array of connection weights
+        net_size: size of network
+        n_tests: number of memories to sample and corrupt
+        corrupt_bits: number of bits to corrupt
     """
-    n_neurons = len(memories[0])
-    synapses = np.zeros((n_neurons, n_neurons))
-    for i, row in enumerate(synapses):
-        for j, col in enumerate(row):
-            if i != j:  # T_ii = 0
-                sum = 0
-                for m in memories:
-                    # this is the formula in Hopfield's paper, which amounts
-                    # to doing: if m[i] == m[j], sum += 1, else sum -= 1
-                    sum += (2 * m[i] - 1) * (2 * m[j] - 1)
-                synapses[i, j] = sum
+    net = HopfieldNet(size=net_size)
 
-    return synapses
+    print(f"Network size: {net_size}")
+    print(f"Bits to corrupt: {corrupt_bits}\n")
 
+    for n_memories in gen_num_memories(net.size):
+        memories = net.generate_memories(n_memories)
+        net.train(memories)
 
-def update_neuron(i, synapses, activations):
-    """
-    Set the value of neuron i as a function of the activations of
+        success_rate = 0
 
-    Sum weighted activation values of neurons in network.
-    If sum is >= 0, set the activation of neuron i to 1.
-    Else, set it to 0.
+        for t in trange(1, n_tests + 1):
+            # choose memory to corrupt
+            memory_choice = net.rng.integers(n_memories)
+            input = memories[memory_choice].copy()
 
-    Note that synapses[i][i] = 0, so the activation of i is automatically
-    discounted.
+            # corrupt memory
+            input = net.corrupt_input(input, corrupt_bits)
 
-    params:
-        i: int, neuron to update
-        synapses: np array, table of connection weights
-        activations: list[int], activation values of each neuron in network
+            # run network
+            net.process_input(input)
 
-    return:
-        activations: list[int], updated state of network
-    """
-    x_i = 0
-    for j, v_j in enumerate(activations):
-        x_i += synapses[i][j] * v_j
-    if x_i >= 0:
-        activations[i] = 1
-    else:
-        activations[i] = 0
+            # record outcome
+            success = net.state == memories[memory_choice]
+            success_rate += (success - success_rate) / t  # incremental average
 
-    return activations
-
-
-def retrieve(activations):
-    """
-    compute resting state of network given input vector of activations.
-
-    do n_epochs times:
-        choose neuron uniformly at random
-        update value of neuron based on activities of other neurons and
-        connection weights
-
-    params:
-        activations: list[int], activation values of each neuron in network
-
-    return:
-        activation: vector of neuron activations
-    """
-    for _ in range(n_epochs):
-        choice = rng.integers(n_neurons)
-        activations = update_neuron(choice, synapses, activations)
-    return activations
-
-
-def test_convergence():
-    pass
-
-
-# TODO: add parameter governing how many bits are corrupted
-def test_retrieval(memories, n_tests):
-    """
-    Tests network's retrieval capabilities.
-
-    do n_tests times:
-        select a memory at random
-        corrupt random bit
-        feed to network
-        run net for n_epochs steps
-        compare output with target
-
-    print:
-        % correct recall
-        model parameters (epochs, network size, number of memories)
-    """
-    successes = 0
-    for _ in trange(n_tests):
-        # choose memory for input
-        memory_choice = rng.integers(n_memories)
-        # have to do the following to make sure input and mem are distinct objects
-        input = [i for i in memories[memory_choice]]
-
-        # corrupt random bit in input
-        bit_choice = rng.integers(n_neurons)
-        input[bit_choice] = 1 - input[bit_choice]
-
-        output = retrieve(input)
-        successes += output == memories[memory_choice]
-
-    print(f"Correct retrieval: {successes/n_tests}")
-    print("Parameters: ")
-    print(f"\tstabilization epochs: {n_epochs}")
-    print(f"\tnetwork size: {n_neurons}")
-    print(f"\tnumber of memories: {n_memories}")
+        print(f"Number of memories encoded: {n_memories}")
+        print(f"Success rate (avg over {n_tests} tests): {success_rate:.2f}\n")
 
 
 if __name__ == "__main__":
-    # initialize memories
-    memories = generate_memories()
-
-    # display first 5 memories
-    print(f"First {min(n_memories, 5)} memories:")
-    for i in range(min(n_memories, 5)):
-        print(f"{i+1}: ", memories[i])
-    print()
-
-    # compute synaptic weights
-    synapses = compute_synapses(memories)
-
-    # test how long net takes to settle for different values of n_neurons
-
-    # test quality of retrieval as n_neurons, n_memories change
-    test_retrieval(memories, 100)
+    net_size = 100
+    n_tests = 200
+    corrupt_bits = 1
+    test_recall(net_size=net_size, n_tests=n_tests, corrupt_bits=corrupt_bits)
